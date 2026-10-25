@@ -86,7 +86,7 @@ const R={};
 async function route(){if(!S.creds&&!S.demo)return renderLogin();if(!$('#main'))shell();
  const [r,...a]=(location.hash.slice(1)||'home').split('/');S.route=R[r]?r:'home';S.arg=decodeURIComponent(a.join('/'));
  try{await R[S.route](S.arg)}catch(e){console.error(e);setMain(hdr('Something went wrong')+`<div class="pad"><div class="card"><p class="err">${esc(e.message)}</p><p class="note">${netHelp()}</p><div class="btns"><button class="btn p" onclick="route()">Retry</button><button class="btn" data-go="provider">Provider settings</button></div></div></div>`)}}
-const netHelp=()=>'If this keeps failing, the provider may only allow plain-HTTP or block browser requests. Check Settings \u2192 Connection (top of Settings): Proxy URL, Proxy access key and \u201cAllow HTTP streams\u201d are on. If it says \u201cBlocked host\u201d, that host must be added to the Worker\u2019s ALLOWED_HOSTS.';
+const netHelp=()=>'If this keeps failing, the provider may only allow plain-HTTP or block browser requests. Check Settings \u2192 Connection (top of Settings): Proxy URL, Proxy access key and \u201cAllow HTTP streams\u201d are on. If it says \u201cBlocked host\u201d, set the Worker\u2019s ALLOWED_HOSTS to * (all servers) or add that host.';
 window.addEventListener('hashchange',route);
 
 /* ---------- pages ---------- */

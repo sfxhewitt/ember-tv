@@ -14,10 +14,10 @@ GitHub Pages is HTTPS; browsers block `http://` requests from HTTPS pages. Ember
 1. dash.cloudflare.com → **Workers & Pages** → your `ember-proxy` Worker → **Edit code** → replace everything with `proxy/worker.js` → **Deploy**.
 2. Worker → **Settings → Variables and Secrets** → **Add**:
    - Type **Secret**, name `ACCESS_KEY`, value: a long random phrase you choose (don't share it publicly).
-   - Type **Text**, name `ALLOWED_HOSTS`, value `apexdfg.com` (comma-separate extra hosts).
+   - Type **Text**, name `ALLOWED_HOSTS`, value `*` (all servers; this is also the default if unset). To restrict instead, use a comma list with wildcards, e.g. `apexdfg.com,*.theperspex.com`. Private/local addresses are always blocked.
    - Remove any old `ALLOW_ANY` variable.
 3. **Deploy**.
-4. If a channel says *Proxy says: Blocked host: X*, add `X` to `ALLOWED_HOSTS` (Worker → Observability/Logs also shows "Blocked host").
+4. If a channel says *Proxy says: Blocked host: X*, set `ALLOWED_HOSTS` to `*` (or add `X`).
 5. Optional rate limit: add a **Rate Limiting** binding named `RATE_LIMITER` (e.g. 600 requests / 60 s). HLS uses many requests, so keep it generous.
 
 ## Share link for friends

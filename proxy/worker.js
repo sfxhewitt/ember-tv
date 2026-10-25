@@ -3,19 +3,21 @@
 //
 // Settings (Worker → Settings → Variables and Secrets):
 //   ACCESS_KEY     (Secret, required)  shared key; app sends it as ?k=… (or header x-ember-key)
-//   ALLOWED_HOSTS  (Text, optional)    comma list of hostnames/IPs, default "apexdfg.com".
-//                                      Subdomains of listed names are allowed. Redirect targets are checked too.
+//   ALLOWED_HOSTS  (Text, optional)    default "*" (any public host). Or a comma list: "apexdfg.com,*.theperspex.com".
+//                                      Private/loopback/link-local addresses are always blocked. Every redirect hop is checked.
 //   RATE_LIMITER   (optional binding)  Cloudflare Rate Limiting binding; limits requests per IP.
 //
 // Usage: https://<worker>/?url=<encoded URL>&k=<key>
-const DEFAULT_HOSTS = 'apexdfg.com';
+const DEFAULT_HOSTS = '*';
+const PRIVATE = /^(localhost|.*\.localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|0\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|\[?(::1?|f[cd][0-9a-f]{2}:.*|fe80:.*)\]?$)/i;
 const PASS_HEADERS = ['range', 'if-range', 'accept'];
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'range, if-range, x-ember-key', 'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS', 'Access-Control-Expose-Headers': 'content-length, content-range, accept-ranges, content-type, x-ember-error' };
 // Mask credentials in paths/queries for debug messages.
 const mask = u => { const x = new URL(u); x.searchParams.has('password') && x.searchParams.set('password', '***'); x.searchParams.has('username') && x.searchParams.set('username', '***'); const p = x.pathname.split('/'); const i = ['live','movie','series','timeshift'].includes(p[1]) ? 2 : 1; if (p.length > i + 2) { p[i] = '***'; p[i + 1] = '***'; } return x.host + p.join('/') + (x.search || ''); };
 const err = (status, msg) => new Response(msg, { status, headers: { ...CORS, 'content-type': 'text/plain', 'x-ember-error': msg } });
 
-function hostAllowed(host, list) { host = host.toLowerCase(); return list.some(h => host === h || host.endsWith('.' + h)); }
+// '*' = any public host; '*.example.com' = example.com and any subdomain; 'example.com' = it and its subdomains.
+function hostAllowed(host, list) { host = host.toLowerCase(); return list.some(h => { if (h === '*') return true; if (h.startsWith('*.')) h = h.slice(2); return host === h || host.endsWith('.' + h); }); }
 function safeEq(a, b) { if (!a || !b || a.length !== b.length) return false; let r = 0; for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i); return r === 0; }
 
 export default {
@@ -44,9 +46,10 @@ export default {
     let r;
     for (let hop = 0; hop < 6; hop++) {
       if (!/^https?:$/.test(url.protocol)) return err(400, 'Bad scheme');
+      if (PRIVATE.test(url.hostname)) return err(403, `Blocked private address: ${url.hostname}`);
       if (!hostAllowed(url.hostname, allowed)) {
         console.log('Blocked host:', url.hostname);
-        return err(403, `Blocked host: ${url.hostname} (add it to ALLOWED_HOSTS)`);
+        return err(403, `Blocked host: ${url.hostname} (add it to ALLOWED_HOSTS, or set ALLOWED_HOSTS to *)`);
       }
       r = await fetch(url.toString(), { method: req.method, headers: h, redirect: 'manual' });
       const loc = r.status >= 300 && r.status < 400 && r.headers.get('location');
