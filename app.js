@@ -250,7 +250,7 @@ function play(it){closePlayer();if(it.type!=='live')pushHist({k:it.type+':'+it.i
  <div class="pc">${live?'':`<button id="rw">${ic('rw')}</button>`}<button id="pp">${ic('pause')}</button>${live?'':`<button id="fw">${ic('ff')}</button>`}<span class="sp"></span><button class="bb" id="au">${ic('audio')}Audio</button><button class="bb" id="sb">${ic('cc')}Subtitles</button>${live&&it.list?`<button class="bb" id="cl">${ic('list')}Channels</button>`:''}</div></div></div>`;
  document.body.appendChild(el);const v=el.querySelector('video'),ui=el.querySelector('#pui'),pm=el.querySelector('#pm');
   let hls=null,mp=null;
- const fail=m=>{pm.innerHTML=`<div><p style="font-size:17px;font-weight:600">Can\u2019t play this stream</p><p class="note" style="max-width:420px;margin:8px auto">${esc(m)}</p><p class="note" style="max-width:420px;margin:auto">${netHelp()}</p><p class="note err" id="diag" style="max-width:420px;margin:8px auto"></p></div>`;
+ const fail=m=>{pm.innerHTML=`<div><p style="font-size:17px;font-weight:600">Can\u2019t play this stream</p><p class="note" style="max-width:420px;margin:8px auto">${esc(m)}</p><p class="note" style="max-width:420px;margin:auto">${netHelp()}</p><p class="note err" id="diag" style="max-width:420px;margin:8px auto"></p>${log.length?`<p class="note" style="max-width:440px;margin:8px auto;text-align:left;font:11px/1.5 ui-monospace,monospace">${log.map(esc).join('<br>')}</p>`:''}</div>`;
   const src=live?streamUrl('live',it.id,fmts[Math.min(fi,fmts.length-1)]):streamUrl(it.type,it.id,it.ext);
   if(!S.demo){const ac=new AbortController();fetch(src,{signal:ac.signal}).then(r=>{ac.abort();const e=r.headers.get('x-ember-error');const d=$('#diag');if(d)d.textContent=`Tried: ${fmts.join(', ')}. Proxy says: `+(e||'HTTP '+r.status)+(af.length?` \u00b7 provider formats: ${af.join(', ')}`:'')}).catch(()=>{})}};
  const kill=()=>{hls?.destroy();hls=null;try{mp?.destroy()}catch{}mp=null;v.removeAttribute('src');v.load()};
@@ -260,25 +260,33 @@ function play(it){closePlayer();if(it.type!=='live')pushHist({k:it.type+':'+it.i
  const af=(LS.get('formats',null)||[]).map(x=>String(x).toLowerCase());const pref=settings().format;
  let fmts=live?(af.length&&!af.includes('m3u8')?['ts','raw']:pref==='ts'?['ts','raw','m3u8']:['m3u8','ts','raw']):[it.ext||'mp4'];let fi=0,triedNative=false;
  v.disableRemotePlayback=true;
- const next=m=>{fi++;if(fi<fmts.length){pm.innerHTML=spinner;start()}else fail(m)};
- async function start(){kill();const f=fmts[fi];const src=live?streamUrl('live',it.id,f):streamUrl(it.type,it.id,it.ext);
+ const log=[];let D={},started=false,stT=null;
+ const note=m=>{log.push(`${fmts[fi]}: ${m}${D.speed!=null?` \u00b7 ${D.speed.toFixed(0)} KB/s`:''}${D.vc?` \u00b7 video ${D.vc}`:''}${D.ac?` \u00b7 audio ${D.ac}`:''}${D.frames!=null?` \u00b7 ${D.frames} frames`:''}`)};
+ const next=m=>{note(m);clearTimeout(stT);fi++;if(fi<fmts.length){pm.innerHTML=spinner;start()}else fail(m)};
+ async function start(){kill();const f=fmts[fi];D={};started=false;clearTimeout(stT);
+  stT=setTimeout(()=>{if(started)return;if(v.readyState>=2&&v.paused){askTap();return}next('no picture after 12s')},12000);const src=live?streamUrl('live',it.id,f==='ts-na'?'ts':f):streamUrl(it.type,it.id,it.ext);
   if(S.demo&&f!=='m3u8')return fail('Demo stream is HLS only.');
   if(f==='m3u8'){if(window.Hls&&Hls.isSupported()&&!(native&&!triedNative&&/iPhone|iPad/.test(navigator.userAgent))){hls=new Hls(Object.assign({enableWorker:true,startLevel:-1,capLevelToPlayerSize:true,abrEwmaFastLive:2,abrEwmaSlowLive:6,abrBandWidthFactor:.8,abrBandWidthUpFactor:.6,maxBufferLength:live?30:60,maxMaxBufferLength:live?60:120,maxBufferSize:120e6,backBufferLength:live?15:30,maxBufferHole:.5,nudgeMaxRetry:6,manifestLoadingMaxRetry:4,levelLoadingMaxRetry:6,fragLoadingMaxRetry:6,fragLoadingRetryDelay:800,manifestLoadingTimeOut:15000,fragLoadingTimeOut:25000},live?{liveSyncDurationCount:3,liveMaxLatencyDurationCount:8,liveDurationInfinity:true}:{}));hls.loadSource(src);hls.attachMedia(v);
-    hls.on(Hls.Events.MANIFEST_PARSED,()=>{if(hls.levels.length>1)hls.nextLevel=Math.min(1,hls.levels.length-1);v.play().catch(()=>{})});let rec=0,net=0;
+    hls.on(Hls.Events.MANIFEST_PARSED,()=>{if(hls.levels.length>1)hls.nextLevel=Math.min(1,hls.levels.length-1);tryPlay()});let rec=0,net=0;
     hls.on(Hls.Events.FRAG_LOADED,()=>{net=0});
     hls.on(Hls.Events.ERROR,(e,d)=>{if(!d.fatal)return;
      if(d.type===Hls.ErrorTypes.MEDIA_ERROR&&rec<3){rec++;if(rec===2)hls.swapAudioCodec();hls.recoverMediaError();return}
      if(d.type===Hls.ErrorTypes.NETWORK_ERROR&&net<5){const h=hls;const delay=Math.min(8000,1000*2**net++);pm.innerHTML=spinner;setTimeout(()=>{if(hls!==h)return;h.stopLoad();h.startLoad(-1)},delay);return}
      next(d.details||'HLS error')})}
-   else if(native){triedNative=true;v.src=src;v.play().catch(()=>{})}else next('HLS not supported')}
-  else if(f==='ts'||f==='raw'){const MS=window.ManagedMediaSource||window.MediaSource;if(!MS)return next('MPEG-TS needs Media Source (iOS 17.1 or later)');
+   else if(native){triedNative=true;v.src=src;tryPlay()}else next('HLS not supported')}
+  else if(f==='ts'||f==='raw'||f==='ts-na'){const MS=window.ManagedMediaSource||window.MediaSource;if(!MS)return next('MPEG-TS needs Media Source (iOS 17.1 or later)');
    try{if(!window.mpegts)await loadScript('https://cdn.jsdelivr.net/npm/mpegts.js@1.8.2/dist/mpegts.min.js');}catch{return next('Could not load TS player')}
    const fl=mpegts.getFeatureList();if(!fl.mseLivePlayback)return next('MPEG-TS not supported on this device');
-   mp=mpegts.createPlayer({type:'mpegts',isLive:true,url:src},{enableWorker:true,enableStashBuffer:true,stashInitialSize:384*1024,liveBufferLatencyChasing:true,liveBufferLatencyMaxLatency:8,liveBufferLatencyMinRemain:2,lazyLoad:false,autoCleanupSourceBuffer:true});mp.attachMediaElement(v);mp.load();mp.play()?.catch?.(()=>{});let mr=0;mp.on(mpegts.Events.ERROR,(t,d,info)=>{if(t===mpegts.ErrorTypes.NETWORK_ERROR&&mr++<3){setTimeout(()=>{if(mp){try{mp.unload();mp.load();mp.play()}catch{}}},1000*mr);return}next((d||t)+(info&&info.code?' '+info.code:''))})}
-  else{v.src=src;v.play().catch(()=>{})}}
+   mp=mpegts.createPlayer({type:'mpegts',isLive:true,url:src,hasAudio:f!=='ts-na'},{enableWorker:true,enableStashBuffer:true,stashInitialSize:384*1024,liveBufferLatencyChasing:true,liveBufferLatencyMaxLatency:8,liveBufferLatencyMinRemain:2,lazyLoad:false,autoCleanupSourceBuffer:true});mp.on(mpegts.Events.MEDIA_INFO,mi=>{D.vc=mi.videoCodec;D.ac=mi.audioCodec;if(mi.audioCodec&&!/mp4a|aac/i.test(mi.audioCodec)&&!fmts.includes('ts-na'))fmts.push('ts-na')});mp.on(mpegts.Events.STATISTICS_INFO,st=>{D.speed=st.speed;D.frames=st.decodedFrames});
+   mp.attachMediaElement(v);mp.load();tryPlay();let mr=0;mp.on(mpegts.Events.ERROR,(t,d,info)=>{if(t===mpegts.ErrorTypes.NETWORK_ERROR&&mr++<3){setTimeout(()=>{if(mp){try{mp.unload();mp.load();mp.play()}catch{}}},1000*mr);return}next((d||t)+(info&&info.code?' '+info.code:''))})}
+  else{v.src=src;tryPlay()}}
+ // iOS blocks un-muted autoplay outside a tap: fall back to muted, else show a tap-to-play button.
+ function tryPlay(){const p=v.play();if(p&&p.catch)p.catch(e=>{if(e&&e.name==='NotAllowedError'){v.muted=true;v.play().then(showUnmute).catch(askTap)}})}
+ function askTap(){pm.innerHTML=`<button class="btn p" style="pointer-events:auto" id="tap">${ic('play')}Tap to play</button>`;$('#tap',el).onclick=e=>{e.stopPropagation();pm.innerHTML=spinner;v.play().catch(()=>{v.muted=true;v.play().then(showUnmute).catch(()=>{})})}}
+ function showUnmute(){if(el.querySelector('#um'))return;const b=document.createElement('button');b.id='um';b.className='btn';b.style.cssText='position:absolute;right:16px;top:calc(76px + env(safe-area-inset-top));z-index:6';b.textContent='\ud83d\udd07 Tap for sound';b.onclick=e=>{e.stopPropagation();v.muted=false;b.remove()};el.appendChild(b)}
  v.addEventListener('error',()=>{if(hls||mp)return;const m=v.error?.message||'The stream could not be loaded.';if(native&&fmts[fi]==='m3u8'&&triedNative&&window.Hls&&Hls.isSupported()&&!hls){start();return}next(m)});
  // Stall watchdog: silent recovery with backoff; jump to live edge; reload source (keeping VOD position); then switch format.
- let lastT=-1,stuckFor=0,reloads=0;const wd=setInterval(()=>{if(!document.body.contains(el))return clearInterval(wd);if(v.paused&&!v.seeking&&v.readyState>0&&!stuckFor)return;
+ let lastT=-1,stuckFor=0,reloads=0;const wd=setInterval(()=>{if(!document.body.contains(el))return clearInterval(wd);if(!started)return;if(v.paused&&!v.seeking&&v.readyState>0&&!stuckFor)return;
   const t=v.currentTime;if(t!==lastT&&v.readyState>=3){lastT=t;stuckFor=0;reloads=Math.max(0,reloads-0.02);return}
   stuckFor++;if(stuckFor===4){const b=v.buffered;if(b.length){const end=b.end(b.length-1);if(end-t>1){v.currentTime=live?end-2:t+.5;return}}if(live&&hls&&hls.liveSyncPosition){v.currentTime=hls.liveSyncPosition;return}}
   if(stuckFor===8||stuckFor===16){reloads++;if(reloads>3)return next('Stream kept stalling');const pos=live?0:v.currentTime;pm.innerHTML=spinner;
@@ -291,7 +299,7 @@ function play(it){closePlayer();if(it.type!=='live')pushHist({k:it.type+':'+it.i
    if(hls&&hls.levels[hls.currentLevel])br=(hls.levels[hls.currentLevel].bitrate/1e6).toFixed(2)+' Mb/s \u00b7 est '+(hls.bandwidthEstimate/1e6).toFixed(1)+' Mb/s';
    const q=v.getVideoPlaybackQuality?.();so.innerHTML=`${fmts[fi]}${hls?' (hls.js)':mp?' (mpegts.js)':' (native)'}<br>${res} ${br}<br>buffer ${ahead}s \u00b7 dropped ${q?q.droppedVideoFrames:0}<br>recoveries ${Math.round(reloads)}`},1000)}
  start();
- v.addEventListener('playing',()=>pm.innerHTML='');v.addEventListener('waiting',()=>pm.innerHTML=spinner);
+ v.addEventListener('playing',()=>{started=true;clearTimeout(stT);pm.innerHTML=''});v.addEventListener('timeupdate',()=>{if(v.currentTime>0&&!started){started=true;clearTimeout(stT);pm.innerHTML=''}});v.addEventListener('waiting',()=>pm.innerHTML=spinner);
  const k=it.type+':'+it.id;const w=watch().find(x=>x.k===k);if(w&&!live)v.addEventListener('loadedmetadata',()=>{if(w.pos<v.duration*.95)v.currentTime=w.pos},{once:true});
  const fmt=s=>!isFinite(s)?'0:00':(s>=3600?Math.floor(s/3600)+':':'')+String(Math.floor(s/60)%60).padStart(s>=3600?2:1,'0')+':'+String(Math.floor(s%60)).padStart(2,'0');
  let last=0;v.addEventListener('timeupdate',()=>{if(live)return;el.querySelector('#cur').textContent=fmt(v.currentTime);el.querySelector('#dur').textContent=fmt(v.duration);if(!el._drag)el.querySelector('#sk').value=v.currentTime/v.duration*1000||0;
@@ -308,7 +316,7 @@ function play(it){closePlayer();if(it.type!=='live')pushHist({k:it.type+':'+it.i
  el.querySelector('#fs').onclick=()=>{if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();else (el.requestFullscreen||el.webkitRequestFullscreen).call(el)};
  const pip=el.querySelector('#pip');if(pip)pip.onclick=()=>{if(v.webkitSetPresentationMode)v.webkitSetPresentationMode(v.webkitPresentationMode==='picture-in-picture'?'inline':'picture-in-picture');else v.requestPictureInPicture?.()};
  let hide;const poke=()=>{ui.classList.remove('hide');clearTimeout(hide);hide=setTimeout(()=>{if(!v.paused&&!ui.querySelector('.sheet'))ui.classList.add('hide')},3500)};el.addEventListener('pointermove',poke);el.addEventListener('click',e=>{if(e.target===ui||e.target===v){if(ui.classList.contains('hide'))poke();else ui.classList.add('hide')}else poke()});poke();
- P={el,v,kill};history.pushState({player:1},'',location.href)}
+ P={el,v,kill:()=>{clearTimeout(stT);kill()}};history.pushState({player:1},'',location.href)}
 function closePlayer(){if(!P)return;P.kill?.();P.v.pause();P.v.removeAttribute('src');P.v.load();P.el.remove();P=null;if(S.route==='home'||S.route==='detail')route()}
 window.addEventListener('popstate',()=>{if(P)closePlayer()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closePlayer()});
