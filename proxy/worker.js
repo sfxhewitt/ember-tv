@@ -11,6 +11,8 @@
 const DEFAULT_HOSTS = 'apexdfg.com';
 const PASS_HEADERS = ['range', 'if-range', 'accept'];
 const CORS = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'range, if-range, x-ember-key', 'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS', 'Access-Control-Expose-Headers': 'content-length, content-range, accept-ranges, content-type, x-ember-error' };
+// Mask credentials in paths/queries for debug messages.
+const mask = u => { const x = new URL(u); x.searchParams.has('password') && x.searchParams.set('password', '***'); x.searchParams.has('username') && x.searchParams.set('username', '***'); const p = x.pathname.split('/'); const i = ['live','movie','series','timeshift'].includes(p[1]) ? 2 : 1; if (p.length > i + 2) { p[i] = '***'; p[i + 1] = '***'; } return x.host + p.join('/') + (x.search || ''); };
 const err = (status, msg) => new Response(msg, { status, headers: { ...CORS, 'content-type': 'text/plain', 'x-ember-error': msg } });
 
 function hostAllowed(host, list) { host = host.toLowerCase(); return list.some(h => host === h || host.endsWith('.' + h)); }
@@ -53,6 +55,11 @@ export default {
       if (hop === 5) return err(508, 'Too many redirects');
     }
 
+    if (!r.ok && r.status !== 206) {
+      const msg = `Upstream ${r.status} from ${url.protocol}//${mask(url.toString())}`;
+      console.log(msg);
+      return err(r.status, msg);
+    }
     const out = new Headers();
     for (const k of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control', 'last-modified', 'etag']) { const v = r.headers.get(k); if (v) out.set(k, v); }
     for (const [k, v] of Object.entries(CORS)) out.set(k, v);

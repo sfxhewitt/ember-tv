@@ -42,7 +42,8 @@ async function api(action,params={},creds=S.creds){
  const j=await r.json();if(action)S.cache[key]=j;return j}
 function streamUrl(type,id,ext,fmt){const c=S.creds;if(S.demo)return DEMO.stream;
  const seg={live:'live',movie:'movie',episode:'series'}[type];
- return wrap(`${base()}/${seg}/${encodeURIComponent(c.user)}/${encodeURIComponent(c.pass)}/${id}.${type==='live'?(ext||settings().format):(ext||'mp4')}`)}
+ const U=encodeURIComponent(c.user),Pw=encodeURIComponent(c.pass);if(type==='live'&&ext==='raw')return wrap(`${base()}/${U}/${Pw}/${id}`);
+ return wrap(`${base()}/${seg}/${U}/${Pw}/${id}.${type==='live'?(ext||settings().format):(ext||'mp4')}`)}
 const img=u=>!u?'':(S.demo?u:wrap(u));
 
 /* ---------- demo data (original placeholder art; no provider content) ---------- */
@@ -196,7 +197,7 @@ R.library=async tab=>{tab=tab||LS.get('libtab','watchlist');LS.set('libtab',tab)
  const c=$('#clr');if(c)c.onclick=()=>{LS.set(pk('hist'),[]);R.library('history')}};
 
 R.settings=async()=>{const s=settings();let acct='';
- try{if(!S.demo){const a=await api('',{},S.creds);const u=a.user_info||{};acct=`<div class="set"><span>Account<small>${esc(u.status||'')} \u00b7 ${u.exp_date?'expires '+new Date(u.exp_date*1000).toLocaleDateString('en-GB'):'no expiry'} \u00b7 ${esc(u.max_connections||'?')} connection(s)</small></span></div>`}}catch{}
+ try{if(!S.demo){const a=await api('',{},S.creds);const u=a.user_info||{};LS.set('formats',u.allowed_output_formats||[]);acct=`<div class="set"><span>Account<small>${esc(u.status||'')} \u00b7 ${u.exp_date?'expires '+new Date(u.exp_date*1000).toLocaleDateString('en-GB'):'no expiry'} \u00b7 ${esc(u.max_connections||'?')} connection(s)</small></span></div>`}}catch{}
  const tg=(k,l,d)=>`<div class="set"><span>${l}<small>${d}</small></span><button class="tg ${s[k]?'on':''}" data-k="${k}"></button></div>`;
  setMain(hdr('Settings')+`<div class="pad" style="max-width:760px">${S.demo?'':`<div class="sec"><h3>Connection</h3></div><div class="card" style="margin-bottom:18px"><div class="fld"><label>Server URL (kept as http://)</label><input id="cs" value="${esc(S.creds.server)}" inputmode="url" autocapitalize="off" autocorrect="off"></div><div class="fld"><label>Proxy URL</label><input id="cp" value="${esc(S.creds.proxy??LS.get('proxyurl',DEFAULT_PROXY))}" inputmode="url" autocapitalize="off" autocorrect="off"></div><div class="fld"><label>Proxy access key</label><input id="ck" type="password" value="${esc(proxyKey())}" autocapitalize="off" autocorrect="off"></div>${tg('allowHttp','Allow HTTP streams (via proxy)','Routes http:// API, artwork and video through your proxy so Safari doesn\u2019t block them')}<p class="note" id="cm">Active route: ${proxyFor()?'via proxy '+esc(proxyFor()):'direct'}</p><div class="btns"><button class="btn p" id="csv">Save connection</button></div></div>`}<div class="sec"><h3>General</h3></div><div class="card"><div class="set"><span>Provider<small>${S.demo?'Demo mode':esc(normServer(S.creds.server))} \u00b7 ${S.demo?'':esc(S.creds.user)}${S.creds?.proxy?' \u00b7 via proxy':''}</small></span><button class="btn" data-go="provider">Edit</button></div>${acct}
  <div class="set"><span>Live stream format<small>HLS (.m3u8) works best on iPhone</small></span><select class="chip" id="fmt"><option value="m3u8" ${s.format==='m3u8'?'selected':''}>HLS (.m3u8)</option><option value="ts" ${s.format==='ts'?'selected':''}>MPEG-TS (.ts)</option></select></div>
@@ -231,7 +232,7 @@ function providerForm(c){c=c||{};return `<div class="form"><div><h2 style="font-
 function bindProvider(){const read=()=>({name:$('#pn').value.trim(),server:$('#ps').value.trim(),user:$('#pu').value.trim(),pass:$('#pp').value,proxy:$('#px').value.trim(),key:$('#pk').value.trim()});
  const test=async()=>{const c=read(),m=$('#msg');if(!c.server||!c.user||!c.pass){m.className='note err';m.textContent='Fill in server, username and password.';return false}
   m.className='note';m.textContent='Connecting\u2026';
-  const was=S.creds;S.creds=c;try{const j=await api('',{},c);const u=j.user_info||{};if(+u.auth!==1)throw new Error('Login rejected \u2014 check username/password');
+  const was=S.creds;S.creds=c;try{const j=await api('',{},c);const u=j.user_info||{};if(+u.auth!==1)throw new Error('Login rejected \u2014 check username/password');LS.set('formats',u.allowed_output_formats||[]);
    m.className='note ok';m.textContent=`\u2713 Connected \u00b7 ${u.status||'Active'}${u.exp_date?' \u00b7 expires '+new Date(u.exp_date*1000).toLocaleDateString('en-GB'):''}`;return true}
   catch(e){S.creds=was;m.className='note err';m.textContent=(e instanceof TypeError?'Could not reach the server from the browser (blocked HTTP / CORS). ':'')+e.message+'. '+netHelp();return false}};
  $('#tc').onclick=test;$('#sv').onclick=async()=>{if(await test()){S.creds=read();S.cache={};LS.set('creds',S.creds);toast('Provider saved');if(!$('#main'))shell();location.hash='home';route()}}}
@@ -251,12 +252,14 @@ function play(it){closePlayer();if(it.type!=='live')pushHist({k:it.type+':'+it.i
   let hls=null,mp=null;
  const fail=m=>{pm.innerHTML=`<div><p style="font-size:17px;font-weight:600">Can\u2019t play this stream</p><p class="note" style="max-width:420px;margin:8px auto">${esc(m)}</p><p class="note" style="max-width:420px;margin:auto">${netHelp()}</p><p class="note err" id="diag" style="max-width:420px;margin:8px auto"></p></div>`;
   const src=live?streamUrl('live',it.id,fmts[Math.min(fi,fmts.length-1)]):streamUrl(it.type,it.id,it.ext);
-  if(!S.demo)fetch(src,{method:'HEAD'}).then(r=>{const e=r.headers.get('x-ember-error');const d=$('#diag');if(d&&(e||!r.ok))d.textContent='Proxy says: '+(e||'HTTP '+r.status)}).catch(()=>{})};
+  if(!S.demo){const ac=new AbortController();fetch(src,{signal:ac.signal}).then(r=>{ac.abort();const e=r.headers.get('x-ember-error');const d=$('#diag');if(d)d.textContent=`Tried: ${fmts.join(', ')}. Proxy says: `+(e||'HTTP '+r.status)+(af.length?` \u00b7 provider formats: ${af.join(', ')}`:'')}).catch(()=>{})}};
  const kill=()=>{hls?.destroy();hls=null;try{mp?.destroy()}catch{}mp=null;v.removeAttribute('src');v.load()};
  const native=v.canPlayType('application/vnd.apple.mpegurl');
  const loadScript=u=>new Promise((ok,no)=>{const sc=document.createElement('script');sc.src=u;sc.onload=ok;sc.onerror=no;document.head.appendChild(sc)});
  // Live: try m3u8 first, then MPEG-TS (mpegts.js transmux where MSE exists); VOD: direct file.
- const fmts=live?[settings().format,settings().format==='m3u8'?'ts':'m3u8']:[it.ext||'mp4'];let fi=0,triedNative=false;
+ const af=(LS.get('formats',null)||[]).map(x=>String(x).toLowerCase());const pref=settings().format;
+ let fmts=live?(af.length&&!af.includes('m3u8')?['ts','raw']:pref==='ts'?['ts','raw','m3u8']:['m3u8','ts','raw']):[it.ext||'mp4'];let fi=0,triedNative=false;
+ v.disableRemotePlayback=true;
  const next=m=>{fi++;if(fi<fmts.length){pm.innerHTML=spinner;start()}else fail(m)};
  async function start(){kill();const f=fmts[fi];const src=live?streamUrl('live',it.id,f):streamUrl(it.type,it.id,it.ext);
   if(S.demo&&f!=='m3u8')return fail('Demo stream is HLS only.');
@@ -268,10 +271,10 @@ function play(it){closePlayer();if(it.type!=='live')pushHist({k:it.type+':'+it.i
      if(d.type===Hls.ErrorTypes.NETWORK_ERROR&&net<5){const h=hls;const delay=Math.min(8000,1000*2**net++);pm.innerHTML=spinner;setTimeout(()=>{if(hls!==h)return;h.stopLoad();h.startLoad(-1)},delay);return}
      next(d.details||'HLS error')})}
    else if(native){triedNative=true;v.src=src;v.play().catch(()=>{})}else next('HLS not supported')}
-  else if(f==='ts'){const MS=window.ManagedMediaSource||window.MediaSource;if(!MS)return next('MPEG-TS needs Media Source (not available on this iPhone)');
-   try{if(!window.mpegts)await loadScript('https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js');}catch{return next('Could not load TS player')}
-   if(!mpegts.isSupported())return next('MPEG-TS not supported on this device');
-   mp=mpegts.createPlayer({type:'mpegts',isLive:true,url:src},{enableWorker:true,enableStashBuffer:true,stashInitialSize:384*1024,liveBufferLatencyChasing:true,liveBufferLatencyMaxLatency:8,liveBufferLatencyMinRemain:2,lazyLoad:false,autoCleanupSourceBuffer:true});mp.attachMediaElement(v);mp.load();mp.play()?.catch?.(()=>{});mp.on(mpegts.Events.ERROR,(t,d)=>next(d||t))}
+  else if(f==='ts'||f==='raw'){const MS=window.ManagedMediaSource||window.MediaSource;if(!MS)return next('MPEG-TS needs Media Source (iOS 17.1 or later)');
+   try{if(!window.mpegts)await loadScript('https://cdn.jsdelivr.net/npm/mpegts.js@1.8.2/dist/mpegts.min.js');}catch{return next('Could not load TS player')}
+   const fl=mpegts.getFeatureList();if(!fl.mseLivePlayback)return next('MPEG-TS not supported on this device');
+   mp=mpegts.createPlayer({type:'mpegts',isLive:true,url:src},{enableWorker:true,enableStashBuffer:true,stashInitialSize:384*1024,liveBufferLatencyChasing:true,liveBufferLatencyMaxLatency:8,liveBufferLatencyMinRemain:2,lazyLoad:false,autoCleanupSourceBuffer:true});mp.attachMediaElement(v);mp.load();mp.play()?.catch?.(()=>{});let mr=0;mp.on(mpegts.Events.ERROR,(t,d,info)=>{if(t===mpegts.ErrorTypes.NETWORK_ERROR&&mr++<3){setTimeout(()=>{if(mp){try{mp.unload();mp.load();mp.play()}catch{}}},1000*mr);return}next((d||t)+(info&&info.code?' '+info.code:''))})}
   else{v.src=src;v.play().catch(()=>{})}}
  v.addEventListener('error',()=>{if(hls||mp)return;const m=v.error?.message||'The stream could not be loaded.';if(native&&fmts[fi]==='m3u8'&&triedNative&&window.Hls&&Hls.isSupported()&&!hls){start();return}next(m)});
  // Stall watchdog: silent recovery with backoff; jump to live edge; reload source (keeping VOD position); then switch format.
@@ -313,4 +316,5 @@ document.addEventListener('keydown',e=>{if(e.key==='Escape')closePlayer()});
 /* ---------- boot ---------- */
 if('serviceWorker' in navigator&&location.protocol!=='file:')navigator.serviceWorker.register('sw.js');
 setInterval(()=>document.querySelectorAll('.clk').forEach(c=>c.textContent=new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})),20000);
+if(S.creds&&!S.demo&&LS.get('formats',null)===null)api('',{},S.creds).then(j=>LS.set('formats',(j.user_info||{}).allowed_output_formats||[])).catch(()=>{});
 route();
