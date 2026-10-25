@@ -16,28 +16,31 @@ const pk=k=>k+'.'+prof();
 const favs=()=>LS.get(pk('favs'),[]);
 const hist=()=>LS.get(pk('hist'),[]);
 const watch=()=>LS.get(pk('watch'),[]);
-const settings=()=>Object.assign({autoNext:true,logos:true,adult:false,format:'m3u8'},LS.get('settings',{}));
+const settings=()=>Object.assign({allowHttp:true,autoNext:true,logos:true,adult:false,format:'m3u8'},LS.get('settings',{}));
 function toggleList(key,item){let l=LS.get(pk(key),[]);const i=l.findIndex(x=>x.k===item.k);i>=0?l.splice(i,1):l.unshift(item);LS.set(pk(key),l);return i<0}
 function pushHist(item){let l=hist().filter(x=>x.k!==item.k);l.unshift(Object.assign({t:Date.now()},item));LS.set(pk('hist'),l.slice(0,60))}
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),2200)}
 
 /* ---------- networking ---------- */
-function normServer(u){u=(u||'').trim().replace(/\/+$/,'');if(!/^https?:\/\//i.test(u))u='http://'+u;
- // GitHub Pages is HTTPS: browsers block http:// requests (mixed content), so upgrade.
- if(location.protocol==='https:'&&!(S.creds&&S.creds.proxy))u=u.replace(/^http:/i,'https:');return u}
-function wrap(url){const p=S.creds&&S.creds.proxy;return p?p.replace(/\/+$/,'')+'/?url='+encodeURIComponent(url):url}
+const DEFAULT_PROXY='https://ember-proxy.sfxhewitt.workers.dev';
+const pageHttps=()=>location.protocol==='https:';
+// Never upgrade the upstream: http:// stays http://. The browser talks HTTPS to the Worker, the Worker fetches http upstream.
+function normServer(u){u=(u||'').trim().replace(/\/+$/,'');if(!/^https?:\/\//i.test(u))u='http://'+u;return u}
+function proxyFor(c=S.creds){if(!c)return '';const p=(c.proxy??DEFAULT_PROXY)||'';if(p)return p.replace(/\/+$/,'');return (settings().allowHttp&&pageHttps()&&/^http:/i.test(normServer(c.server)))?DEFAULT_PROXY:''}
+function wrap(url,force,c=S.creds){if(!url||/^data:/.test(url))return url;const p=proxyFor(c);if(!p)return url;
+ const http=/^http:/i.test(url);if(force||(http&&pageHttps()&&settings().allowHttp))return p+'/?url='+encodeURIComponent(url);return url}
 const base=()=>normServer(S.creds.server);
 async function api(action,params={},creds=S.creds){
  if(S.demo)return DEMO.api(action,params);
  const key=action+JSON.stringify(params);if(S.cache[key])return S.cache[key];
  const q=new URLSearchParams(Object.assign({username:creds.user,password:creds.pass},action?{action}:{},params));
- const saved=S.creds;S.creds=creds;const url=wrap(normServer(creds.server)+'/player_api.php?'+q);S.creds=saved;
+ const url=wrap(normServer(creds.server)+'/player_api.php?'+q,true,creds);
  const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);
  const j=await r.json();if(action)S.cache[key]=j;return j}
-function streamUrl(type,id,ext){const c=S.creds;if(S.demo)return DEMO.stream;
+function streamUrl(type,id,ext,fmt){const c=S.creds;if(S.demo)return DEMO.stream;
  const seg={live:'live',movie:'movie',episode:'series'}[type];
- return wrap(`${base()}/${seg}/${encodeURIComponent(c.user)}/${encodeURIComponent(c.pass)}/${id}.${type==='live'?settings().format:(ext||'mp4')}`)}
-const img=u=>!u?'':(S.demo||/^data:/.test(u)?u:(location.protocol==='https:'&&/^http:/.test(u)&&S.creds.proxy?wrap(u):u));
+ return wrap(`${base()}/${seg}/${encodeURIComponent(c.user)}/${encodeURIComponent(c.pass)}/${id}.${type==='live'?(ext||settings().format):(ext||'mp4')}`)}
+const img=u=>!u?'':(S.demo?u:wrap(u));
 
 /* ---------- demo data (original placeholder art; no provider content) ---------- */
 const DEMO=(()=>{const hues=[18,200,280,140,340,45,220,0,170,260,30,310];
@@ -79,7 +82,7 @@ const R={};
 async function route(){if(!S.creds&&!S.demo)return renderLogin();if(!$('#main'))shell();
  const [r,...a]=(location.hash.slice(1)||'home').split('/');S.route=R[r]?r:'home';S.arg=decodeURIComponent(a.join('/'));
  try{await R[S.route](S.arg)}catch(e){console.error(e);setMain(hdr('Something went wrong')+`<div class="pad"><div class="card"><p class="err">${esc(e.message)}</p><p class="note">${netHelp()}</p><div class="btns"><button class="btn p" onclick="route()">Retry</button><button class="btn" data-go="provider">Provider settings</button></div></div></div>`)}}
-const netHelp=()=>'If this keeps failing, the provider may only allow plain-HTTP or block browser requests. Add your Cloudflare Worker proxy URL under Settings \u2192 Provider (see README).';
+const netHelp=()=>'If this keeps failing, the provider may only allow plain-HTTP or block browser requests. Check Settings \u2192 Connection (top of Settings): Proxy URL and \u201cAllow HTTP streams\u201d.';
 window.addEventListener('hashchange',route);
 
 /* ---------- pages ---------- */
@@ -192,7 +195,7 @@ R.library=async tab=>{tab=tab||LS.get('libtab','watchlist');LS.set('libtab',tab)
 R.settings=async()=>{const s=settings();let acct='';
  try{if(!S.demo){const a=await api('',{},S.creds);const u=a.user_info||{};acct=`<div class="set"><span>Account<small>${esc(u.status||'')} \u00b7 ${u.exp_date?'expires '+new Date(u.exp_date*1000).toLocaleDateString('en-GB'):'no expiry'} \u00b7 ${esc(u.max_connections||'?')} connection(s)</small></span></div>`}}catch{}
  const tg=(k,l,d)=>`<div class="set"><span>${l}<small>${d}</small></span><button class="tg ${s[k]?'on':''}" data-k="${k}"></button></div>`;
- setMain(hdr('Settings')+`<div class="pad" style="max-width:760px"><div class="card"><div class="set"><span>Provider<small>${S.demo?'Demo mode':esc(normServer(S.creds.server))} \u00b7 ${S.demo?'':esc(S.creds.user)}${S.creds?.proxy?' \u00b7 via proxy':''}</small></span><button class="btn" data-go="provider">Edit</button></div>${acct}
+ setMain(hdr('Settings')+`<div class="pad" style="max-width:760px">${S.demo?'':`<div class="sec"><h3>Connection</h3></div><div class="card" style="margin-bottom:18px"><div class="fld"><label>Server URL (kept as http://)</label><input id="cs" value="${esc(S.creds.server)}" inputmode="url" autocapitalize="off" autocorrect="off"></div><div class="fld"><label>Proxy URL</label><input id="cp" value="${esc(S.creds.proxy??DEFAULT_PROXY)}" inputmode="url" autocapitalize="off" autocorrect="off"></div>${tg('allowHttp','Allow HTTP streams (via proxy)','Routes http:// API, artwork and video through your proxy so Safari doesn\u2019t block them')}<p class="note" id="cm">Active route: ${proxyFor()?'via proxy '+esc(proxyFor()):'direct'}</p><div class="btns"><button class="btn p" id="csv">Save connection</button></div></div>`}<div class="sec"><h3>General</h3></div><div class="card"><div class="set"><span>Provider<small>${S.demo?'Demo mode':esc(normServer(S.creds.server))} \u00b7 ${S.demo?'':esc(S.creds.user)}${S.creds?.proxy?' \u00b7 via proxy':''}</small></span><button class="btn" data-go="provider">Edit</button></div>${acct}
  <div class="set"><span>Live stream format<small>HLS (.m3u8) works best on iPhone</small></span><select class="chip" id="fmt"><option value="m3u8" ${s.format==='m3u8'?'selected':''}>HLS (.m3u8)</option><option value="ts" ${s.format==='ts'?'selected':''}>MPEG-TS (.ts)</option></select></div>
  ${tg('autoNext','Auto-play next episode','Start the next episode when one ends')}${tg('adult','Show adult categories','Hidden behind the profile PIN')}
  <div class="set"><span>Profiles & parental PIN<small>Current: ${esc(prof())}</small></span><button class="btn" data-go="profiles">Manage</button></div>
@@ -200,7 +203,9 @@ R.settings=async()=>{const s=settings();let acct='';
  <div class="set"><span>Sign out<small>Removes your login from this device</small></span><button class="btn" id="so" style="color:#ff6b6b">Sign out</button></div></div>
  <p class="note" style="text-align:center;margin-top:18px">Ember \u00b7 your login is stored only on this device.</p></div>`);
  document.querySelectorAll('.tg').forEach(b=>b.onclick=()=>{s[b.dataset.k]=!s[b.dataset.k];LS.set('settings',s);b.classList.toggle('on')});
+ if($('#csv'))$('#csv').onclick=async()=>{const c=Object.assign({},S.creds,{server:$('#cs').value.trim(),proxy:$('#cp').value.trim()});const m=$('#cm');m.className='note';m.textContent='Testing\u2026';try{const j=await api('',{},c);if(+(j.user_info||{}).auth!==1)throw new Error('Login rejected');S.creds=c;S.cache={};LS.set('creds',c);m.className='note ok';m.textContent='\u2713 Saved \u00b7 connected';}catch(e){m.className='note err';m.textContent='Not saved: '+e.message}};
  $('#fmt').onchange=e=>{s.format=e.target.value;LS.set('settings',s)};$('#cc').onclick=()=>{S.cache={};toast('Cache cleared')};
+ document.querySelectorAll('.tg').forEach(b=>b.addEventListener('click',()=>{S.cache={}}));
  $('#so').onclick=()=>{if(confirm('Sign out of this device?')){localStorage.removeItem('ember.creds');S.creds=null;location.hash='';location.search='';}}};
 
 R.profiles=async()=>{const ps=LS.get('profiles',[{n:'Main',c:'#ff6a2b'},{n:'Kids',c:'#3b82f6',pin:''}]);const cur=prof();
@@ -218,7 +223,7 @@ function providerForm(c){c=c||{};return `<div class="form"><div><h2 style="font-
  <p class="note ok">\ud83d\udd12 Secure: your details are saved only on this device.</p></div>
  <div class="card"><div class="fld"><label>Provider name</label><input id="pn" value="${esc(c.name||'Supreme TV')}"></div><div class="fld"><label>Server URL</label><input id="ps" value="${esc(c.server||'http://apexdfg.com')}" inputmode="url" autocapitalize="off" autocorrect="off"></div>
  <div class="fld"><label>Username</label><input id="pu" value="${esc(c.user||'')}" autocapitalize="off" autocorrect="off" autocomplete="username"></div><div class="fld"><label>Password</label><input id="pp" type="password" value="${esc(c.pass||'')}" autocomplete="current-password"></div>
- <details ${c.proxy?'open':''}><summary class="note" style="cursor:pointer">Advanced: proxy URL (optional)</summary><div class="fld" style="margin-top:10px"><label>Cloudflare Worker URL, e.g. https://ember-proxy.yourname.workers.dev</label><input id="px" value="${esc(c.proxy||'')}" inputmode="url" autocapitalize="off"></div></details>
+ <div class="fld"><label>Proxy URL (lets iPhone play http:// streams)</label><input id="px" value="${esc(c.proxy??DEFAULT_PROXY)}" inputmode="url" autocapitalize="off" autocorrect="off"><p class="note">Your own Cloudflare Worker. API, guide, artwork and video all go through it; the server URL stays http://.</p></div>
  <p class="note" id="msg"></p><div class="btns"><button class="btn" id="tc">Test Connection</button><button class="btn p" id="sv">Save Provider</button></div>${S.creds?'':'<p class="note" style="margin-top:14px">Just looking? <a href="?demo#home" style="color:var(--ac)">Open demo mode</a></p>'}</div></div>`}
 function bindProvider(){const read=()=>({name:$('#pn').value.trim(),server:$('#ps').value.trim(),user:$('#pu').value.trim(),pass:$('#pp').value,proxy:$('#px').value.trim()});
  const test=async()=>{const c=read(),m=$('#msg');if(!c.server||!c.user||!c.pass){m.className='note err';m.textContent='Fill in server, username and password.';return false}
@@ -240,13 +245,27 @@ function play(it){closePlayer();if(it.type!=='live')pushHist({k:it.type+':'+it.i
  <div class="pbot">${live?`<div class="scrub"><span class="badge">LIVE</span><span id="pnow" style="flex:1"></span></div>`:`<div class="scrub"><span id="cur">0:00</span><input type="range" id="sk" min="0" max="1000" value="0"><span id="dur">0:00</span></div>`}
  <div class="pc">${live?'':`<button id="rw">${ic('rw')}</button>`}<button id="pp">${ic('pause')}</button>${live?'':`<button id="fw">${ic('ff')}</button>`}<span class="sp"></span><button class="bb" id="au">${ic('audio')}Audio</button><button class="bb" id="sb">${ic('cc')}Subtitles</button>${live&&it.list?`<button class="bb" id="cl">${ic('list')}Channels</button>`:''}</div></div></div>`;
  document.body.appendChild(el);const v=el.querySelector('video'),ui=el.querySelector('#pui'),pm=el.querySelector('#pm');
- const src=it.type==='live'?streamUrl('live',it.id):streamUrl(it.type,it.id,it.ext);
- let hls=null;const isHls=/\.m3u8(\?|$|%3F)/i.test(src)||/m3u8/.test(decodeURIComponent(src));
- const fail=m=>{pm.innerHTML=`<div><p style="font-size:17px;font-weight:600">Can\u2019t play this stream</p><p class="note" style="max-width:420px;margin:8px auto">${esc(m)}</p><p class="note" style="max-width:420px;margin:auto">${live?'Try Settings \u2192 Live stream format, or ':''}${netHelp()}</p></div>`};
- if(isHls&&!v.canPlayType('application/vnd.apple.mpegurl')&&window.Hls&&Hls.isSupported()){hls=new Hls({enableWorker:true,lowLatencyMode:false,backBufferLength:30});hls.loadSource(src);hls.attachMedia(v);
-  hls.on(Hls.Events.MANIFEST_PARSED,()=>v.play().catch(()=>{}));hls.on(Hls.Events.ERROR,(e,d)=>{if(d.fatal){if(d.type===Hls.ErrorTypes.MEDIA_ERROR)hls.recoverMediaError();else fail(d.details||'Network error')}})}
- else{v.src=src;v.play().catch(()=>{})}
- v.addEventListener('playing',()=>pm.innerHTML='');v.addEventListener('waiting',()=>pm.innerHTML=spinner);v.addEventListener('error',()=>fail(v.error?.message||'The stream could not be loaded.'));
+  let hls=null,mp=null;
+ const fail=m=>{pm.innerHTML=`<div><p style="font-size:17px;font-weight:600">Can\u2019t play this stream</p><p class="note" style="max-width:420px;margin:8px auto">${esc(m)}</p><p class="note" style="max-width:420px;margin:auto">${netHelp()}</p></div>`};
+ const kill=()=>{hls?.destroy();hls=null;try{mp?.destroy()}catch{}mp=null;v.removeAttribute('src');v.load()};
+ const native=v.canPlayType('application/vnd.apple.mpegurl');
+ const loadScript=u=>new Promise((ok,no)=>{const sc=document.createElement('script');sc.src=u;sc.onload=ok;sc.onerror=no;document.head.appendChild(sc)});
+ // Live: try m3u8 first, then MPEG-TS (mpegts.js transmux where MSE exists); VOD: direct file.
+ const fmts=live?[settings().format,settings().format==='m3u8'?'ts':'m3u8']:[it.ext||'mp4'];let fi=0,triedNative=false;
+ const next=m=>{fi++;if(fi<fmts.length){pm.innerHTML=spinner;start()}else fail(m)};
+ async function start(){kill();const f=fmts[fi];const src=live?streamUrl('live',it.id,f):streamUrl(it.type,it.id,it.ext);
+  if(S.demo&&f!=='m3u8')return fail('Demo stream is HLS only.');
+  if(f==='m3u8'){if(window.Hls&&Hls.isSupported()&&!(native&&!triedNative&&/iPhone|iPad/.test(navigator.userAgent))){hls=new Hls({enableWorker:true,backBufferLength:30,manifestLoadingMaxRetry:2,fragLoadingMaxRetry:3});hls.loadSource(src);hls.attachMedia(v);
+    hls.on(Hls.Events.MANIFEST_PARSED,()=>v.play().catch(()=>{}));let rec=0;hls.on(Hls.Events.ERROR,(e,d)=>{if(!d.fatal)return;if(d.type===Hls.ErrorTypes.MEDIA_ERROR&&rec++<2)hls.recoverMediaError();else next(d.details||'HLS error')})}
+   else if(native){triedNative=true;v.src=src;v.play().catch(()=>{})}else next('HLS not supported')}
+  else if(f==='ts'){const MS=window.ManagedMediaSource||window.MediaSource;if(!MS)return next('MPEG-TS needs Media Source (not available on this iPhone)');
+   try{if(!window.mpegts)await loadScript('https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js');}catch{return next('Could not load TS player')}
+   if(!mpegts.isSupported())return next('MPEG-TS not supported on this device');
+   mp=mpegts.createPlayer({type:'mpegts',isLive:true,url:src},{enableWorker:true,liveBufferLatencyChasing:true});mp.attachMediaElement(v);mp.load();mp.play()?.catch?.(()=>{});mp.on(mpegts.Events.ERROR,(t,d)=>next(d||t))}
+  else{v.src=src;v.play().catch(()=>{})}}
+ v.addEventListener('error',()=>{if(hls||mp)return;const m=v.error?.message||'The stream could not be loaded.';if(native&&fmts[fi]==='m3u8'&&triedNative&&window.Hls&&Hls.isSupported()&&!hls){start();return}next(m)});
+ start();
+ v.addEventListener('playing',()=>pm.innerHTML='');v.addEventListener('waiting',()=>pm.innerHTML=spinner);
  const k=it.type+':'+it.id;const w=watch().find(x=>x.k===k);if(w&&!live)v.addEventListener('loadedmetadata',()=>{if(w.pos<v.duration*.95)v.currentTime=w.pos},{once:true});
  const fmt=s=>!isFinite(s)?'0:00':(s>=3600?Math.floor(s/3600)+':':'')+String(Math.floor(s/60)%60).padStart(s>=3600?2:1,'0')+':'+String(Math.floor(s%60)).padStart(2,'0');
  let last=0;v.addEventListener('timeupdate',()=>{if(live)return;el.querySelector('#cur').textContent=fmt(v.currentTime);el.querySelector('#dur').textContent=fmt(v.duration);if(!el._drag)el.querySelector('#sk').value=v.currentTime/v.duration*1000||0;
@@ -263,8 +282,8 @@ function play(it){closePlayer();if(it.type!=='live')pushHist({k:it.type+':'+it.i
  el.querySelector('#fs').onclick=()=>{if(v.webkitEnterFullscreen)v.webkitEnterFullscreen();else (el.requestFullscreen||el.webkitRequestFullscreen).call(el)};
  const pip=el.querySelector('#pip');if(pip)pip.onclick=()=>{if(v.webkitSetPresentationMode)v.webkitSetPresentationMode(v.webkitPresentationMode==='picture-in-picture'?'inline':'picture-in-picture');else v.requestPictureInPicture?.()};
  let hide;const poke=()=>{ui.classList.remove('hide');clearTimeout(hide);hide=setTimeout(()=>{if(!v.paused&&!ui.querySelector('.sheet'))ui.classList.add('hide')},3500)};el.addEventListener('pointermove',poke);el.addEventListener('click',e=>{if(e.target===ui||e.target===v){if(ui.classList.contains('hide'))poke();else ui.classList.add('hide')}else poke()});poke();
- P={el,v,hls};history.pushState({player:1},'',location.href)}
-function closePlayer(){if(!P)return;P.hls?.destroy();P.v.pause();P.v.removeAttribute('src');P.v.load();P.el.remove();P=null;if(S.route==='home'||S.route==='detail')route()}
+ P={el,v,kill};history.pushState({player:1},'',location.href)}
+function closePlayer(){if(!P)return;P.kill?.();P.v.pause();P.v.removeAttribute('src');P.v.load();P.el.remove();P=null;if(S.route==='home'||S.route==='detail')route()}
 window.addEventListener('popstate',()=>{if(P)closePlayer()});
 document.addEventListener('keydown',e=>{if(e.key==='Escape')closePlayer()});
 
