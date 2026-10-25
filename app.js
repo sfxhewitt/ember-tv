@@ -16,7 +16,7 @@ const pk=k=>k+'.'+prof();
 const favs=()=>LS.get(pk('favs'),[]);
 const hist=()=>LS.get(pk('hist'),[]);
 const watch=()=>LS.get(pk('watch'),[]);
-const settings=()=>Object.assign({allowHttp:true,autoNext:true,logos:true,adult:false,format:'m3u8'},LS.get('settings',{}));
+const settings=()=>Object.assign({allowHttp:true,stats:false,autoNext:true,logos:true,adult:false,format:'m3u8'},LS.get('settings',{}));
 function toggleList(key,item){let l=LS.get(pk(key),[]);const i=l.findIndex(x=>x.k===item.k);i>=0?l.splice(i,1):l.unshift(item);LS.set(pk(key),l);return i<0}
 function pushHist(item){let l=hist().filter(x=>x.k!==item.k);l.unshift(Object.assign({t:Date.now()},item));LS.set(pk('hist'),l.slice(0,60))}
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),2200)}
@@ -26,16 +26,19 @@ const DEFAULT_PROXY='https://ember-proxy.sfxhewitt.workers.dev';
 const pageHttps=()=>location.protocol==='https:';
 // Never upgrade the upstream: http:// stays http://. The browser talks HTTPS to the Worker, the Worker fetches http upstream.
 function normServer(u){u=(u||'').trim().replace(/\/+$/,'');if(!/^https?:\/\//i.test(u))u='http://'+u;return u}
-function proxyFor(c=S.creds){if(!c)return '';const p=(c.proxy??DEFAULT_PROXY)||'';if(p)return p.replace(/\/+$/,'');return (settings().allowHttp&&pageHttps()&&/^http:/i.test(normServer(c.server)))?DEFAULT_PROXY:''}
+function proxyFor(c=S.creds){if(!c)return '';const p=(c.proxy??LS.get('proxyurl',DEFAULT_PROXY))||'';if(p)return p.replace(/\/+$/,'');return (settings().allowHttp&&pageHttps()&&/^http:/i.test(normServer(c.server)))?DEFAULT_PROXY:''}
+const proxyKey=(c=S.creds)=>(c&&c.key)||LS.get('proxykey','');
 function wrap(url,force,c=S.creds){if(!url||/^data:/.test(url))return url;const p=proxyFor(c);if(!p)return url;
- const http=/^http:/i.test(url);if(force||(http&&pageHttps()&&settings().allowHttp))return p+'/?url='+encodeURIComponent(url);return url}
+ const http=/^http:/i.test(url);if(force||(http&&pageHttps()&&settings().allowHttp))return p+'/?k='+encodeURIComponent(proxyKey(c))+'&url='+encodeURIComponent(url);return url}
+// Share link: https://…/ember-tv/#k=KEY (optional &p=PROXY). Stored locally, then removed from the address bar.
+(()=>{const m=location.hash.match(/^#k=([^&]+)(?:&p=([^&]+))?/);if(m){LS.set('proxykey',decodeURIComponent(m[1]));if(m[2])LS.set('proxyurl',decodeURIComponent(m[2]));history.replaceState(null,'',location.pathname+location.search)}})();
 const base=()=>normServer(S.creds.server);
 async function api(action,params={},creds=S.creds){
  if(S.demo)return DEMO.api(action,params);
  const key=action+JSON.stringify(params);if(S.cache[key])return S.cache[key];
  const q=new URLSearchParams(Object.assign({username:creds.user,password:creds.pass},action?{action}:{},params));
  const url=wrap(normServer(creds.server)+'/player_api.php?'+q,true,creds);
- const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);
+ const r=await fetch(url,{cache:'no-store'});if(!r.ok)throw new Error((r.headers.get('x-ember-error')||'HTTP '+r.status));
  const j=await r.json();if(action)S.cache[key]=j;return j}
 function streamUrl(type,id,ext,fmt){const c=S.creds;if(S.demo)return DEMO.stream;
  const seg={live:'live',movie:'movie',episode:'series'}[type];
@@ -82,7 +85,7 @@ const R={};
 async function route(){if(!S.creds&&!S.demo)return renderLogin();if(!$('#main'))shell();
  const [r,...a]=(location.hash.slice(1)||'home').split('/');S.route=R[r]?r:'home';S.arg=decodeURIComponent(a.join('/'));
  try{await R[S.route](S.arg)}catch(e){console.error(e);setMain(hdr('Something went wrong')+`<div class="pad"><div class="card"><p class="err">${esc(e.message)}</p><p class="note">${netHelp()}</p><div class="btns"><button class="btn p" onclick="route()">Retry</button><button class="btn" data-go="provider">Provider settings</button></div></div></div>`)}}
-const netHelp=()=>'If this keeps failing, the provider may only allow plain-HTTP or block browser requests. Check Settings \u2192 Connection (top of Settings): Proxy URL and \u201cAllow HTTP streams\u201d.';
+const netHelp=()=>'If this keeps failing, the provider may only allow plain-HTTP or block browser requests. Check Settings \u2192 Connection (top of Settings): Proxy URL, Proxy access key and \u201cAllow HTTP streams\u201d are on. If it says \u201cBlocked host\u201d, that host must be added to the Worker\u2019s ALLOWED_HOSTS.';
 window.addEventListener('hashchange',route);
 
 /* ---------- pages ---------- */
@@ -195,15 +198,15 @@ R.library=async tab=>{tab=tab||LS.get('libtab','watchlist');LS.set('libtab',tab)
 R.settings=async()=>{const s=settings();let acct='';
  try{if(!S.demo){const a=await api('',{},S.creds);const u=a.user_info||{};acct=`<div class="set"><span>Account<small>${esc(u.status||'')} \u00b7 ${u.exp_date?'expires '+new Date(u.exp_date*1000).toLocaleDateString('en-GB'):'no expiry'} \u00b7 ${esc(u.max_connections||'?')} connection(s)</small></span></div>`}}catch{}
  const tg=(k,l,d)=>`<div class="set"><span>${l}<small>${d}</small></span><button class="tg ${s[k]?'on':''}" data-k="${k}"></button></div>`;
- setMain(hdr('Settings')+`<div class="pad" style="max-width:760px">${S.demo?'':`<div class="sec"><h3>Connection</h3></div><div class="card" style="margin-bottom:18px"><div class="fld"><label>Server URL (kept as http://)</label><input id="cs" value="${esc(S.creds.server)}" inputmode="url" autocapitalize="off" autocorrect="off"></div><div class="fld"><label>Proxy URL</label><input id="cp" value="${esc(S.creds.proxy??DEFAULT_PROXY)}" inputmode="url" autocapitalize="off" autocorrect="off"></div>${tg('allowHttp','Allow HTTP streams (via proxy)','Routes http:// API, artwork and video through your proxy so Safari doesn\u2019t block them')}<p class="note" id="cm">Active route: ${proxyFor()?'via proxy '+esc(proxyFor()):'direct'}</p><div class="btns"><button class="btn p" id="csv">Save connection</button></div></div>`}<div class="sec"><h3>General</h3></div><div class="card"><div class="set"><span>Provider<small>${S.demo?'Demo mode':esc(normServer(S.creds.server))} \u00b7 ${S.demo?'':esc(S.creds.user)}${S.creds?.proxy?' \u00b7 via proxy':''}</small></span><button class="btn" data-go="provider">Edit</button></div>${acct}
+ setMain(hdr('Settings')+`<div class="pad" style="max-width:760px">${S.demo?'':`<div class="sec"><h3>Connection</h3></div><div class="card" style="margin-bottom:18px"><div class="fld"><label>Server URL (kept as http://)</label><input id="cs" value="${esc(S.creds.server)}" inputmode="url" autocapitalize="off" autocorrect="off"></div><div class="fld"><label>Proxy URL</label><input id="cp" value="${esc(S.creds.proxy??LS.get('proxyurl',DEFAULT_PROXY))}" inputmode="url" autocapitalize="off" autocorrect="off"></div><div class="fld"><label>Proxy access key</label><input id="ck" type="password" value="${esc(proxyKey())}" autocapitalize="off" autocorrect="off"></div>${tg('allowHttp','Allow HTTP streams (via proxy)','Routes http:// API, artwork and video through your proxy so Safari doesn\u2019t block them')}<p class="note" id="cm">Active route: ${proxyFor()?'via proxy '+esc(proxyFor()):'direct'}</p><div class="btns"><button class="btn p" id="csv">Save connection</button></div></div>`}<div class="sec"><h3>General</h3></div><div class="card"><div class="set"><span>Provider<small>${S.demo?'Demo mode':esc(normServer(S.creds.server))} \u00b7 ${S.demo?'':esc(S.creds.user)}${S.creds?.proxy?' \u00b7 via proxy':''}</small></span><button class="btn" data-go="provider">Edit</button></div>${acct}
  <div class="set"><span>Live stream format<small>HLS (.m3u8) works best on iPhone</small></span><select class="chip" id="fmt"><option value="m3u8" ${s.format==='m3u8'?'selected':''}>HLS (.m3u8)</option><option value="ts" ${s.format==='ts'?'selected':''}>MPEG-TS (.ts)</option></select></div>
- ${tg('autoNext','Auto-play next episode','Start the next episode when one ends')}${tg('adult','Show adult categories','Hidden behind the profile PIN')}
+ ${tg('stats','Show stream stats','Overlay bitrate, buffer and recoveries in the player')}${tg('autoNext','Auto-play next episode','Start the next episode when one ends')}${tg('adult','Show adult categories','Hidden behind the profile PIN')}
  <div class="set"><span>Profiles & parental PIN<small>Current: ${esc(prof())}</small></span><button class="btn" data-go="profiles">Manage</button></div>
  <div class="set"><span>Clear cached catalogue<small>Reload channel and film lists</small></span><button class="btn" id="cc">Clear</button></div>
  <div class="set"><span>Sign out<small>Removes your login from this device</small></span><button class="btn" id="so" style="color:#ff6b6b">Sign out</button></div></div>
  <p class="note" style="text-align:center;margin-top:18px">Ember \u00b7 your login is stored only on this device.</p></div>`);
  document.querySelectorAll('.tg').forEach(b=>b.onclick=()=>{s[b.dataset.k]=!s[b.dataset.k];LS.set('settings',s);b.classList.toggle('on')});
- if($('#csv'))$('#csv').onclick=async()=>{const c=Object.assign({},S.creds,{server:$('#cs').value.trim(),proxy:$('#cp').value.trim()});const m=$('#cm');m.className='note';m.textContent='Testing\u2026';try{const j=await api('',{},c);if(+(j.user_info||{}).auth!==1)throw new Error('Login rejected');S.creds=c;S.cache={};LS.set('creds',c);m.className='note ok';m.textContent='\u2713 Saved \u00b7 connected';}catch(e){m.className='note err';m.textContent='Not saved: '+e.message}};
+ if($('#csv'))$('#csv').onclick=async()=>{const c=Object.assign({},S.creds,{server:$('#cs').value.trim(),proxy:$('#cp').value.trim(),key:$('#ck').value.trim()});const m=$('#cm');m.className='note';m.textContent='Testing\u2026';try{const j=await api('',{},c);if(+(j.user_info||{}).auth!==1)throw new Error('Login rejected');S.creds=c;S.cache={};LS.set('creds',c);m.className='note ok';m.textContent='\u2713 Saved \u00b7 connected';}catch(e){m.className='note err';m.textContent='Not saved: '+e.message}};
  $('#fmt').onchange=e=>{s.format=e.target.value;LS.set('settings',s)};$('#cc').onclick=()=>{S.cache={};toast('Cache cleared')};
  document.querySelectorAll('.tg').forEach(b=>b.addEventListener('click',()=>{S.cache={}}));
  $('#so').onclick=()=>{if(confirm('Sign out of this device?')){localStorage.removeItem('ember.creds');S.creds=null;location.hash='';location.search='';}}};
@@ -223,9 +226,9 @@ function providerForm(c){c=c||{};return `<div class="form"><div><h2 style="font-
  <p class="note ok">\ud83d\udd12 Secure: your details are saved only on this device.</p></div>
  <div class="card"><div class="fld"><label>Provider name</label><input id="pn" value="${esc(c.name||'Supreme TV')}"></div><div class="fld"><label>Server URL</label><input id="ps" value="${esc(c.server||'http://apexdfg.com')}" inputmode="url" autocapitalize="off" autocorrect="off"></div>
  <div class="fld"><label>Username</label><input id="pu" value="${esc(c.user||'')}" autocapitalize="off" autocorrect="off" autocomplete="username"></div><div class="fld"><label>Password</label><input id="pp" type="password" value="${esc(c.pass||'')}" autocomplete="current-password"></div>
- <div class="fld"><label>Proxy URL (lets iPhone play http:// streams)</label><input id="px" value="${esc(c.proxy??DEFAULT_PROXY)}" inputmode="url" autocapitalize="off" autocorrect="off"><p class="note">Your own Cloudflare Worker. API, guide, artwork and video all go through it; the server URL stays http://.</p></div>
+ <div class="fld"><label>Proxy URL (lets iPhone play http:// streams)</label><input id="px" value="${esc(c.proxy??LS.get('proxyurl',DEFAULT_PROXY))}" inputmode="url" autocapitalize="off" autocorrect="off"></div><div class="fld"><label>Proxy access key</label><input id="pk" type="password" value="${esc(c.key||LS.get('proxykey',''))}" autocapitalize="off" autocorrect="off" placeholder="Filled in automatically from your invite link"><p class="note">Your own Cloudflare Worker. API, guide, artwork and video all go through it; the server URL stays http://.</p></div>
  <p class="note" id="msg"></p><div class="btns"><button class="btn" id="tc">Test Connection</button><button class="btn p" id="sv">Save Provider</button></div>${S.creds?'':'<p class="note" style="margin-top:14px">Just looking? <a href="?demo#home" style="color:var(--ac)">Open demo mode</a></p>'}</div></div>`}
-function bindProvider(){const read=()=>({name:$('#pn').value.trim(),server:$('#ps').value.trim(),user:$('#pu').value.trim(),pass:$('#pp').value,proxy:$('#px').value.trim()});
+function bindProvider(){const read=()=>({name:$('#pn').value.trim(),server:$('#ps').value.trim(),user:$('#pu').value.trim(),pass:$('#pp').value,proxy:$('#px').value.trim(),key:$('#pk').value.trim()});
  const test=async()=>{const c=read(),m=$('#msg');if(!c.server||!c.user||!c.pass){m.className='note err';m.textContent='Fill in server, username and password.';return false}
   m.className='note';m.textContent='Connecting\u2026';
   const was=S.creds;S.creds=c;try{const j=await api('',{},c);const u=j.user_info||{};if(+u.auth!==1)throw new Error('Login rejected \u2014 check username/password');
@@ -246,7 +249,9 @@ function play(it){closePlayer();if(it.type!=='live')pushHist({k:it.type+':'+it.i
  <div class="pc">${live?'':`<button id="rw">${ic('rw')}</button>`}<button id="pp">${ic('pause')}</button>${live?'':`<button id="fw">${ic('ff')}</button>`}<span class="sp"></span><button class="bb" id="au">${ic('audio')}Audio</button><button class="bb" id="sb">${ic('cc')}Subtitles</button>${live&&it.list?`<button class="bb" id="cl">${ic('list')}Channels</button>`:''}</div></div></div>`;
  document.body.appendChild(el);const v=el.querySelector('video'),ui=el.querySelector('#pui'),pm=el.querySelector('#pm');
   let hls=null,mp=null;
- const fail=m=>{pm.innerHTML=`<div><p style="font-size:17px;font-weight:600">Can\u2019t play this stream</p><p class="note" style="max-width:420px;margin:8px auto">${esc(m)}</p><p class="note" style="max-width:420px;margin:auto">${netHelp()}</p></div>`};
+ const fail=m=>{pm.innerHTML=`<div><p style="font-size:17px;font-weight:600">Can\u2019t play this stream</p><p class="note" style="max-width:420px;margin:8px auto">${esc(m)}</p><p class="note" style="max-width:420px;margin:auto">${netHelp()}</p><p class="note err" id="diag" style="max-width:420px;margin:8px auto"></p></div>`;
+  const src=live?streamUrl('live',it.id,fmts[Math.min(fi,fmts.length-1)]):streamUrl(it.type,it.id,it.ext);
+  if(!S.demo)fetch(src,{method:'HEAD'}).then(r=>{const e=r.headers.get('x-ember-error');const d=$('#diag');if(d&&(e||!r.ok))d.textContent='Proxy says: '+(e||'HTTP '+r.status)}).catch(()=>{})};
  const kill=()=>{hls?.destroy();hls=null;try{mp?.destroy()}catch{}mp=null;v.removeAttribute('src');v.load()};
  const native=v.canPlayType('application/vnd.apple.mpegurl');
  const loadScript=u=>new Promise((ok,no)=>{const sc=document.createElement('script');sc.src=u;sc.onload=ok;sc.onerror=no;document.head.appendChild(sc)});
@@ -255,15 +260,33 @@ function play(it){closePlayer();if(it.type!=='live')pushHist({k:it.type+':'+it.i
  const next=m=>{fi++;if(fi<fmts.length){pm.innerHTML=spinner;start()}else fail(m)};
  async function start(){kill();const f=fmts[fi];const src=live?streamUrl('live',it.id,f):streamUrl(it.type,it.id,it.ext);
   if(S.demo&&f!=='m3u8')return fail('Demo stream is HLS only.');
-  if(f==='m3u8'){if(window.Hls&&Hls.isSupported()&&!(native&&!triedNative&&/iPhone|iPad/.test(navigator.userAgent))){hls=new Hls({enableWorker:true,backBufferLength:30,manifestLoadingMaxRetry:2,fragLoadingMaxRetry:3});hls.loadSource(src);hls.attachMedia(v);
-    hls.on(Hls.Events.MANIFEST_PARSED,()=>v.play().catch(()=>{}));let rec=0;hls.on(Hls.Events.ERROR,(e,d)=>{if(!d.fatal)return;if(d.type===Hls.ErrorTypes.MEDIA_ERROR&&rec++<2)hls.recoverMediaError();else next(d.details||'HLS error')})}
+  if(f==='m3u8'){if(window.Hls&&Hls.isSupported()&&!(native&&!triedNative&&/iPhone|iPad/.test(navigator.userAgent))){hls=new Hls(Object.assign({enableWorker:true,startLevel:-1,capLevelToPlayerSize:true,abrEwmaFastLive:2,abrEwmaSlowLive:6,abrBandWidthFactor:.8,abrBandWidthUpFactor:.6,maxBufferLength:live?30:60,maxMaxBufferLength:live?60:120,maxBufferSize:120e6,backBufferLength:live?15:30,maxBufferHole:.5,nudgeMaxRetry:6,manifestLoadingMaxRetry:4,levelLoadingMaxRetry:6,fragLoadingMaxRetry:6,fragLoadingRetryDelay:800,manifestLoadingTimeOut:15000,fragLoadingTimeOut:25000},live?{liveSyncDurationCount:3,liveMaxLatencyDurationCount:8,liveDurationInfinity:true}:{}));hls.loadSource(src);hls.attachMedia(v);
+    hls.on(Hls.Events.MANIFEST_PARSED,()=>{if(hls.levels.length>1)hls.nextLevel=Math.min(1,hls.levels.length-1);v.play().catch(()=>{})});let rec=0,net=0;
+    hls.on(Hls.Events.FRAG_LOADED,()=>{net=0});
+    hls.on(Hls.Events.ERROR,(e,d)=>{if(!d.fatal)return;
+     if(d.type===Hls.ErrorTypes.MEDIA_ERROR&&rec<3){rec++;if(rec===2)hls.swapAudioCodec();hls.recoverMediaError();return}
+     if(d.type===Hls.ErrorTypes.NETWORK_ERROR&&net<5){const h=hls;const delay=Math.min(8000,1000*2**net++);pm.innerHTML=spinner;setTimeout(()=>{if(hls!==h)return;h.stopLoad();h.startLoad(-1)},delay);return}
+     next(d.details||'HLS error')})}
    else if(native){triedNative=true;v.src=src;v.play().catch(()=>{})}else next('HLS not supported')}
   else if(f==='ts'){const MS=window.ManagedMediaSource||window.MediaSource;if(!MS)return next('MPEG-TS needs Media Source (not available on this iPhone)');
    try{if(!window.mpegts)await loadScript('https://cdn.jsdelivr.net/npm/mpegts.js@1.7.3/dist/mpegts.min.js');}catch{return next('Could not load TS player')}
    if(!mpegts.isSupported())return next('MPEG-TS not supported on this device');
-   mp=mpegts.createPlayer({type:'mpegts',isLive:true,url:src},{enableWorker:true,liveBufferLatencyChasing:true});mp.attachMediaElement(v);mp.load();mp.play()?.catch?.(()=>{});mp.on(mpegts.Events.ERROR,(t,d)=>next(d||t))}
+   mp=mpegts.createPlayer({type:'mpegts',isLive:true,url:src},{enableWorker:true,enableStashBuffer:true,stashInitialSize:384*1024,liveBufferLatencyChasing:true,liveBufferLatencyMaxLatency:8,liveBufferLatencyMinRemain:2,lazyLoad:false,autoCleanupSourceBuffer:true});mp.attachMediaElement(v);mp.load();mp.play()?.catch?.(()=>{});mp.on(mpegts.Events.ERROR,(t,d)=>next(d||t))}
   else{v.src=src;v.play().catch(()=>{})}}
  v.addEventListener('error',()=>{if(hls||mp)return;const m=v.error?.message||'The stream could not be loaded.';if(native&&fmts[fi]==='m3u8'&&triedNative&&window.Hls&&Hls.isSupported()&&!hls){start();return}next(m)});
+ // Stall watchdog: silent recovery with backoff; jump to live edge; reload source (keeping VOD position); then switch format.
+ let lastT=-1,stuckFor=0,reloads=0;const wd=setInterval(()=>{if(!document.body.contains(el))return clearInterval(wd);if(v.paused&&!v.seeking&&v.readyState>0&&!stuckFor)return;
+  const t=v.currentTime;if(t!==lastT&&v.readyState>=3){lastT=t;stuckFor=0;reloads=Math.max(0,reloads-0.02);return}
+  stuckFor++;if(stuckFor===4){const b=v.buffered;if(b.length){const end=b.end(b.length-1);if(end-t>1){v.currentTime=live?end-2:t+.5;return}}if(live&&hls&&hls.liveSyncPosition){v.currentTime=hls.liveSyncPosition;return}}
+  if(stuckFor===8||stuckFor===16){reloads++;if(reloads>3)return next('Stream kept stalling');const pos=live?0:v.currentTime;pm.innerHTML=spinner;
+   if(hls){hls.stopLoad();hls.startLoad(live?-1:pos)}else{const st=pos;start();if(!live)v.addEventListener('loadedmetadata',()=>{v.currentTime=st},{once:true})}}
+  if(stuckFor>=24){stuckFor=0;next('Stream stalled')}},1000);
+ v.addEventListener('stalled',()=>{if(!hls&&!mp&&live)stuckFor=Math.max(stuckFor,4)});
+ // Optional stats overlay
+ if(settings().stats){const so=document.createElement('div');so.style.cssText='position:absolute;left:12px;top:calc(70px + env(safe-area-inset-top));font:11px/1.5 ui-monospace,monospace;background:rgba(0,0,0,.6);padding:6px 9px;border-radius:8px;z-index:5;pointer-events:none;color:#ffb27a';el.appendChild(so);
+  const st=setInterval(()=>{if(!document.body.contains(el))return clearInterval(st);const b=v.buffered;const ahead=b.length?(b.end(b.length-1)-v.currentTime).toFixed(1):'0';let br='',res=v.videoWidth?v.videoWidth+'\u00d7'+v.videoHeight:'';
+   if(hls&&hls.levels[hls.currentLevel])br=(hls.levels[hls.currentLevel].bitrate/1e6).toFixed(2)+' Mb/s \u00b7 est '+(hls.bandwidthEstimate/1e6).toFixed(1)+' Mb/s';
+   const q=v.getVideoPlaybackQuality?.();so.innerHTML=`${fmts[fi]}${hls?' (hls.js)':mp?' (mpegts.js)':' (native)'}<br>${res} ${br}<br>buffer ${ahead}s \u00b7 dropped ${q?q.droppedVideoFrames:0}<br>recoveries ${Math.round(reloads)}`},1000)}
  start();
  v.addEventListener('playing',()=>pm.innerHTML='');v.addEventListener('waiting',()=>pm.innerHTML=spinner);
  const k=it.type+':'+it.id;const w=watch().find(x=>x.k===k);if(w&&!live)v.addEventListener('loadedmetadata',()=>{if(w.pos<v.duration*.95)v.currentTime=w.pos},{once:true});
