@@ -4,6 +4,7 @@ A dark, premium, iPhone-first web app (PWA) for watching your own **Xtream Codes
 
 **No credentials or keys are stored in this repo.** Each person signs in on their own device; their login, proxy URL and access key are kept only in that browser's `localStorage`.
 
+- Series pages show TVmaze info (status, network, next episode) — keyless, info only, never touches playback or the proxy.
 - Demo (fake data): `?demo`
 - Install on iPhone: Safari → Share → **Add to Home Screen**.
 
